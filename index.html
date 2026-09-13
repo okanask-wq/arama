@@ -2389,25 +2389,40 @@ driveDisconnectBtn.addEventListener('click', async ()=>{
   setDriveUiState('idle');
 });
 
-// On load: if a Drive connection was saved before, try to pick it back up.
-// Silent token renewal works when the browser still has an active Google
-// session; otherwise the person just taps "Google Drive'a Bağlan" once more.
+// On load: if a Drive connection was saved before, show what's already
+// cached immediately (instant, no network or Google interaction needed at
+// all) and let the person tap "Yenile" when they want to check for updates.
+// We deliberately do NOT auto-request a fresh token here — on mobile
+// browsers an unprompted token request can fail to pop up properly and
+// ends up navigating the whole page to a broken Google screen instead.
 (async ()=>{
   const savedClientId = await idbGet(DRIVE_CLIENT_ID_KEY).catch(()=>null);
   const savedFolderId = await idbGet(DRIVE_FOLDER_KEY).catch(()=>null);
   if(!savedClientId || !savedFolderId) return;
   driveClientId = savedClientId;
   driveFolderId = savedFolderId;
+
+  const storedToken = await idbGet(DRIVE_TOKEN_KEY).catch(()=>null);
+  if(storedToken && storedToken.token && Date.now() < storedToken.expiry){
+    driveAccessToken = storedToken.token;
+    driveAccessTokenExpiry = storedToken.expiry;
+  }
+
   const tryInit = ()=>{
     if(!window.google || !google.accounts || !google.accounts.oauth2){
       setTimeout(tryInit, 300); // GIS script may still be loading
       return;
     }
-    if(initDriveTokenClient()) syncDriveFolder();
+    initDriveTokenClient();
   };
   tryInit();
-})();
 
+  const loadedFromCache = await loadDriveFromCacheOffline();
+  setDriveUiState('connected');
+  driveConnectedSub.textContent = loadedFromCache
+    ? 'bağlı — güncellemek için Yenile\'ye bas'
+    : 'bağlı — güncellemek için Yenile\'ye bas';
+})();
 
 </script>
 
