@@ -2158,14 +2158,29 @@ function setDriveUiState(state){
   driveConnected.style.display = state === 'connected' ? 'flex' : 'none';
 }
 
-function ensureDriveToken(){
+const DRIVE_TOKEN_KEY = 'driveToken';
+
+async function ensureDriveToken(){
+  if(driveAccessToken && Date.now() < driveAccessTokenExpiry) return driveAccessToken;
+
+  // Not in memory (e.g. fresh page load) — check IndexedDB before asking
+  // Google for a new one; the previous token may still be valid.
+  try{
+    const stored = await idbGet(DRIVE_TOKEN_KEY);
+    if(stored && stored.token && Date.now() < stored.expiry){
+      driveAccessToken = stored.token;
+      driveAccessTokenExpiry = stored.expiry;
+      return driveAccessToken;
+    }
+  } catch(e){ /* ignore, fall through to a live request */ }
+
   return new Promise((resolve, reject)=>{
-    if(driveAccessToken && Date.now() < driveAccessTokenExpiry){ resolve(driveAccessToken); return; }
     if(!driveTokenClient){ reject(new Error('Drive bağlı değil')); return; }
-    driveTokenClient.callback = (resp)=>{
+    driveTokenClient.callback = async (resp)=>{
       if(!resp || resp.error){ reject(new Error((resp && resp.error) || 'Yetkilendirme başarısız')); return; }
       driveAccessToken = resp.access_token;
       driveAccessTokenExpiry = Date.now() + (resp.expires_in * 1000) - 60000;
+      try{ await idbSet(DRIVE_TOKEN_KEY, { token: driveAccessToken, expiry: driveAccessTokenExpiry }); } catch(e){ /* non-fatal */ }
       resolve(driveAccessToken);
     };
     driveTokenClient.requestAccessToken({ prompt: '' });
@@ -2360,6 +2375,7 @@ driveDisconnectBtn.addEventListener('click', async ()=>{
   try{
     await idbDelete(DRIVE_CLIENT_ID_KEY);
     await idbDelete(DRIVE_FOLDER_KEY);
+    await idbDelete(DRIVE_TOKEN_KEY);
   } catch(e){ /* non-fatal */ }
   driveClientId = null;
   driveFolderId = null;
