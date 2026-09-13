@@ -15,6 +15,7 @@
 <meta name="theme-color" content="#161d27">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root{
     --bg: #161d27;
@@ -169,6 +170,44 @@
   }
   .folder-connected-actions button:hover{ border-color:var(--amber-dim); color:var(--amber); }
   #folderDisconnectBtn:hover{ border-color:rgba(201,106,90,.5); color:var(--danger); }
+
+  .drive-settings-panel{
+    background:var(--panel-2);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:10px 12px;
+    display:flex; flex-direction:column; gap:8px;
+  }
+  .drive-settings-panel input{
+    background:var(--panel);
+    border:1px solid var(--line);
+    color:var(--text);
+    font-size:12px;
+    font-family:'IBM Plex Mono', monospace;
+    padding:8px 10px;
+    border-radius:5px;
+    outline:none;
+  }
+  .drive-settings-panel input:focus{ border-color:var(--amber-dim); }
+  .drive-settings-panel button{
+    background:var(--amber);
+    color:#1b140a;
+    border:none;
+    font-weight:600;
+    font-size:12.5px;
+    padding:8px 10px;
+    border-radius:5px;
+    cursor:pointer;
+  }
+  .drive-settings-panel button:hover{ filter:brightness(1.05); }
+  .drive-settings-note{ font-size:10.5px; color:var(--muted); }
+  .drive-connected{
+    background:var(--panel-2);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:10px 12px;
+    display:flex; flex-direction:column; gap:9px;
+  }
 
   .doc-list{
     display:flex; flex-direction:column; gap:6px;
@@ -450,6 +489,28 @@
     padding:4px 8px; border-radius:5px; flex-shrink:0;
   }
   .modal-close:hover{ color:var(--text); background:rgba(255,255,255,.06); }
+  .modal-match-nav{
+    display:flex; align-items:center; gap:6px;
+    flex-shrink:0;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:20px;
+    padding:4px 6px;
+    margin-right:6px;
+  }
+  .modal-match-nav button{
+    background:none; border:none; color:var(--muted);
+    cursor:pointer; font-size:11px;
+    width:22px; height:22px;
+    border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .modal-match-nav button:hover{ background:rgba(232,163,61,.15); color:var(--amber); }
+  .modal-match-nav span{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px; color:var(--text);
+    min-width:38px; text-align:center;
+  }
   .modal-body{
     padding:20px 24px 28px;
     overflow-y:auto;
@@ -610,6 +671,32 @@
       </div>
     </div>
 
+    <button class="folder-btn" id="driveConnectBtn" type="button">
+      🔗 Google Drive'a Bağlan
+      <span>telefon dahil her cihazda çalışır, hatırlar</span>
+    </button>
+
+    <div class="drive-settings-panel" id="driveSettingsPanel" style="display:none">
+      <input type="text" id="driveClientIdInput" placeholder="Client ID (xxxx.apps.googleusercontent.com)">
+      <input type="text" id="driveFolderInput" placeholder="Drive klasör linki ya da klasör ID'si">
+      <button id="driveConnectSaveBtn" type="button">Bağlan</button>
+      <div class="drive-settings-note">Bu bilgiler sadece bu tarayıcıda saklanır.</div>
+    </div>
+
+    <div class="drive-connected" id="driveConnected" style="display:none">
+      <div class="folder-connected-row">
+        <span class="folder-connected-icon">🔗</span>
+        <div class="folder-connected-meta">
+          <div class="folder-connected-name">Google Drive</div>
+          <div class="folder-connected-sub" id="driveConnectedSub">bağlı</div>
+        </div>
+      </div>
+      <div class="folder-connected-actions">
+        <button id="driveRescanBtn" type="button">Yenile</button>
+        <button id="driveDisconnectBtn" type="button">Bağlantıyı kes</button>
+      </div>
+    </div>
+
     <div class="doc-list-head">
       <span>DÖKÜMANLAR</span>
       <span id="docCountLabel">0</span>
@@ -649,6 +736,11 @@
           <div class="modal-sub" id="modalSub"></div>
         </div>
       </div>
+      <div class="modal-match-nav" id="modalMatchNav" style="display:none">
+        <button type="button" id="modalPrevMatch" title="Önceki eşleşme">◀</button>
+        <span id="modalMatchCounter">1 / 1</span>
+        <button type="button" id="modalNextMatch" title="Sonraki eşleşme">▶</button>
+      </div>
       <button class="modal-close" id="modalClose" title="Kapat">&times;</button>
     </div>
     <div class="modal-body" id="modalBody"></div>
@@ -679,6 +771,15 @@ const trayEmpty = document.getElementById('trayEmpty');
 const docCountLabel = document.getElementById('docCountLabel');
 const searchInput = document.getElementById('searchInput');
 const searchClear = document.getElementById('searchClear');
+const driveConnectBtn = document.getElementById('driveConnectBtn');
+const driveSettingsPanel = document.getElementById('driveSettingsPanel');
+const driveClientIdInput = document.getElementById('driveClientIdInput');
+const driveFolderInput = document.getElementById('driveFolderInput');
+const driveConnectSaveBtn = document.getElementById('driveConnectSaveBtn');
+const driveConnected = document.getElementById('driveConnected');
+const driveConnectedSub = document.getElementById('driveConnectedSub');
+const driveRescanBtn = document.getElementById('driveRescanBtn');
+const driveDisconnectBtn = document.getElementById('driveDisconnectBtn');
 const statusLeft = document.getElementById('statusLeft');
 const statusRight = document.getElementById('statusRight');
 const results = document.getElementById('results');
@@ -1082,13 +1183,29 @@ function resolveFilenamePatternTitle(doc){
   const stripped = stripExtensions(doc.name);
   const norm = normalizeForMatch(stripped);
 
-  // "SAFETY BULLETIN-NOVEMBER_EMNİYET BÜLTENİ-KASIM" → "Emniyet Bülteni - Kasım"
-  // "CABIN SAFETY BULLETIN-FEBRUARY_KABİN EMNİYET BÜLTENİ-ŞUBAT" → "Kabin Emniyet Bülteni - Şubat"
+  // "SAFETY BULLETIN-NOVEMBER_EMNİYET BÜLTENİ-KASIM" → "Emniyet Bülteni - Kasım 2025"
+  // "CABIN SAFETY BULLETIN-FEBRUARY_KABİN EMNİYET BÜLTENİ-ŞUBAT" → "Kabin Emniyet Bülteni - Şubat 2026"
   if(norm.includes('EMNIYET BULTENI') || norm.includes('SAFETY BULLETIN')){
     const hasKabin = norm.includes('KABIN') || norm.includes('CABIN');
     const month = findMonthInFilename(stripped);
     const prefix = hasKabin ? 'Kabin Emniyet Bülteni' : 'Emniyet Bülteni';
-    return { title: month ? `${prefix} - ${month}` : prefix, code: null };
+    // Same month/title can recur across years — always surface the year too
+    // so two different bulletins are never mistaken for each other.
+    let year = null;
+    const yearInName = stripped.match(/\b(20\d{2})\b/);
+    if(yearInName){
+      year = yearInName[1];
+    } else {
+      const rd = extractRevDateInfo(doc);
+      if(rd.date){
+        const ym = rd.date.match(/(\d{2,4})$/);
+        if(ym) year = ym[1].length === 2 ? '20' + ym[1] : ym[1];
+      }
+    }
+    let title = prefix;
+    if(month) title += ' - ' + month;
+    if(year) title += ' ' + year;
+    return { title, code: null };
   }
 
   // "ANNOUNCEMENT 2026-087 REV01 ..._DUYURU 2026-087 REV01 EYLÜL AYI BRİFİNG SORULARI" →
@@ -1130,6 +1247,78 @@ function extractDocTitleInfo(doc){
   const result = extractCodeRevTitle(doc);
   doc._titleInfo = result;
   return result;
+}
+
+const DOC_DATE_RE_G = /\b(\d{1,2})[.\-\/](\d{1,2})[.\-\/](\d{2,4})\b/g;
+const DATE_LABEL_PATTERNS = [/^yürürlük/, /^revizyon\s*tarih/, /^yayım\s*tarih/, /^yayın\s*tarih/, /^tarih/, /^date/];
+
+// Finds the first *plausible* date in a string — rejects dotted-number
+// document codes like "10.71.064" (which have the same DD.MM.YYYY shape)
+// by checking the month is 1-12, the day is 1-31, and a 4-digit year is in
+// a sane range.
+function findValidDate(text){
+  const matches = text.matchAll(DOC_DATE_RE_G);
+  for(const m of matches){
+    const day = parseInt(m[1], 10);
+    const month = parseInt(m[2], 10);
+    const yearStr = m[3];
+    const year = parseInt(yearStr, 10);
+    if(month < 1 || month > 12) continue;
+    if(day < 1 || day > 31) continue;
+    if(yearStr.length === 4 && (year < 1990 || year > 2035)) continue;
+    if(yearStr.length === 3) continue; // e.g. "064" — not a real year format
+    return m[0];
+  }
+  return null;
+}
+
+function extractRevDateInfo(doc){
+  if(doc._revDateInfo) return doc._revDateInfo;
+  const source = (doc.ext === 'pdf' && doc.pages && doc.pages[0]) ? doc.pages[0] : (doc.text || '');
+  const lines = source.split('\n').map(l => l.trim()).filter(Boolean).slice(0, 60);
+  const fullText = lines.join('\n');
+
+  let rev = null;
+  const revMatch = trLower(fullText).match(/\brev(?:izyon|ision)?\.?\s*(?:no\.?)?\s*:?\s*(\d{1,3})\b/);
+  if(revMatch) rev = revMatch[1];
+
+  let date = null;
+  for(let li = 0; li < DATE_LABEL_PATTERNS.length && !date; li++){
+    const labelRe = DATE_LABEL_PATTERNS[li];
+    for(let i = 0; i < lines.length; i++){
+      if(!labelRe.test(trLower(lines[i]))) continue;
+      const sameLine = findValidDate(lines[i]);
+      if(sameLine){ date = sameLine; break; }
+      if(lines[i+1]){
+        const nextLine = findValidDate(lines[i+1]);
+        if(nextLine){ date = nextLine; break; }
+      }
+    }
+  }
+  if(!date){
+    // No labeled date found — fall back to the first date-like pattern
+    // anywhere on the page, skipping obvious "this copy was generated on"
+    // print-footer lines which would be misleading here.
+    for(const l of lines){
+      if(/üretil|kopya|ddms|kontroll/.test(trLower(l))) continue;
+      const m = findValidDate(l);
+      if(m){ date = m; break; }
+    }
+  }
+
+  const result = { rev, date };
+  doc._revDateInfo = result;
+  return result;
+}
+
+function getDocMetaLine(doc){
+  const titleInfo = extractDocTitleInfo(doc);
+  if(titleInfo.code) return titleInfo.code;
+  const rd = extractRevDateInfo(doc);
+  const parts = [];
+  if(rd.rev) parts.push('Rev ' + rd.rev);
+  if(rd.date) parts.push(rd.date);
+  return parts.length ? parts.join(' · ') : null;
 }
 
 // Only name+size — deliberately NOT including lastModified. Cloud-synced
@@ -1267,11 +1456,12 @@ function renderDocList(){
     const item = document.createElement('div');
     item.className = 'doc-item' + (doc.status === 'pending' ? ' pending' : '') + (doc.status === 'error' ? ' error' : '') + (doc.status === 'ready' ? ' clickable' : '') + (doc.unpublished ? ' unpublished' : '');
     const titleInfo = doc.status === 'ready' ? extractDocTitleInfo(doc) : null;
+    const metaLine = doc.status === 'ready' ? getDocMetaLine(doc) : null;
     const displayName = (titleInfo && titleInfo.title) || doc.name;
     const sub = doc.status === 'pending' ? 'okunuyor...'
       : doc.status === 'error' ? doc.error
       : doc.unpublished ? 'Yayından kalktı'
-      : (titleInfo && titleInfo.code) ? titleInfo.code
+      : metaLine ? metaLine
       : (doc.ext === 'pdf' && doc.pageCount ? doc.pageCount + ' sayfa · ' + formatSize(doc.size) : formatSize(doc.size));
     item.innerHTML = `
       <div class="doc-icon ${iconClass(doc.ext)}">${iconLabel(doc.ext)}</div>
@@ -1402,10 +1592,11 @@ function buildResultCard(g, query){
   }
   titles.appendChild(nameRow);
 
-  if(titleInfo.code){
+  const metaLine = getDocMetaLine(g.doc);
+  if(metaLine){
     const codeEl = document.createElement('div');
     codeEl.className = 'result-head-code';
-    codeEl.textContent = titleInfo.code;
+    codeEl.textContent = metaLine;
     titles.appendChild(codeEl);
   }
 
@@ -1608,6 +1799,12 @@ const modalTitle = document.getElementById('modalTitle');
 const modalSub = document.getElementById('modalSub');
 const modalIcon = document.getElementById('modalIcon');
 const modalClose = document.getElementById('modalClose');
+const modalMatchNav = document.getElementById('modalMatchNav');
+const modalPrevMatch = document.getElementById('modalPrevMatch');
+const modalNextMatch = document.getElementById('modalNextMatch');
+const modalMatchCounter = document.getElementById('modalMatchCounter');
+let modalMarks = [];
+let modalMarkIndex = 0;
 
 function highlightTextNodes(rootEl, query){
   let count = 0;
@@ -1791,12 +1988,17 @@ function openDocModal(doc, query){
   modalIcon.className = 'doc-icon ' + iconClass(doc.ext);
   modalIcon.textContent = iconLabel(doc.ext);
   const titleInfo = extractDocTitleInfo(doc);
+  const metaLine = getDocMetaLine(doc);
   modalTitle.textContent = titleInfo.title || doc.name;
 
   modalBody.innerHTML = '';
+  modalMarks = [];
+  modalMarkIndex = 0;
+  modalMatchNav.style.display = 'none';
+
   if(!doc.text && !doc.displayHtml){
     modalBody.innerHTML = '<span style="color:var(--muted)">Bu dökümandan metin çıkarılamadı.</span>';
-    modalSub.textContent = titleInfo.code || '';
+    modalSub.textContent = metaLine || '';
     modalOverlay.classList.add('show');
     return;
   }
@@ -1804,16 +2006,40 @@ function openDocModal(doc, query){
   const contentEl = buildDocContent(doc);
   modalBody.appendChild(contentEl);
 
-  const { count, firstMark } = highlightTextNodes(contentEl, query);
+  const { count } = highlightTextNodes(contentEl, query);
   const matchInfo = query
     ? (count > 0 ? `"${query}" için ${count} eşleşme` : `"${query}" bu dökümanın içeriğinde geçmiyor (dosya adı eşleşti)`)
     : (doc.ext === 'pdf' && doc.pageCount ? doc.pageCount + ' sayfa' : '');
-  modalSub.textContent = titleInfo.code ? (matchInfo ? `${titleInfo.code} · ${matchInfo}` : titleInfo.code) : matchInfo;
+  modalSub.textContent = metaLine ? (matchInfo ? `${metaLine} · ${matchInfo}` : metaLine) : matchInfo;
 
   modalOverlay.classList.add('show');
-  if(firstMark) firstMark.scrollIntoView({ block: 'center' });
-  else modalBody.scrollTop = 0;
+
+  modalMarks = Array.from(contentEl.querySelectorAll('mark'));
+  if(modalMarks.length > 0){
+    modalMarkIndex = 0;
+    updateMatchCounter();
+    modalMarks[0].scrollIntoView({ block: 'center' });
+    modalMatchNav.style.display = modalMarks.length > 1 ? 'flex' : 'none';
+  } else {
+    modalBody.scrollTop = 0;
+  }
 }
+
+function updateMatchCounter(){
+  modalMatchCounter.textContent = `${modalMarkIndex + 1} / ${modalMarks.length}`;
+}
+function goToMatch(newIndex){
+  if(modalMarks.length === 0) return;
+  const current = modalMarks[modalMarkIndex];
+  if(current) current.classList.remove('current-mark');
+  modalMarkIndex = ((newIndex % modalMarks.length) + modalMarks.length) % modalMarks.length;
+  const next = modalMarks[modalMarkIndex];
+  next.classList.add('current-mark');
+  next.scrollIntoView({ block: 'center' });
+  updateMatchCounter();
+}
+modalPrevMatch.addEventListener('click', ()=> goToMatch(modalMarkIndex - 1));
+modalNextMatch.addEventListener('click', ()=> goToMatch(modalMarkIndex + 1));
 
 function closeDocModal(){
   modalOverlay.classList.remove('show');
@@ -1823,8 +2049,237 @@ modalOverlay.addEventListener('click', e=>{
   if(e.target === modalOverlay) closeDocModal();
 });
 document.addEventListener('keydown', e=>{
-  if(e.key === 'Escape' && modalOverlay.classList.contains('show')) closeDocModal();
+  if(!modalOverlay.classList.contains('show')) return;
+  if(e.key === 'Escape'){ closeDocModal(); return; }
+  if(modalMarks.length > 1 && document.activeElement !== searchInput){
+    if(e.key === 'ArrowDown' || e.key === 'ArrowRight'){ e.preventDefault(); goToMatch(modalMarkIndex + 1); }
+    else if(e.key === 'ArrowUp' || e.key === 'ArrowLeft'){ e.preventDefault(); goToMatch(modalMarkIndex - 1); }
+  }
 });
+
+// ---- Google Drive connection ----
+// Works everywhere (including iOS, where local folder access is impossible)
+// because it never touches the filesystem — it authenticates once via
+// Google, then reads the chosen folder directly over the Drive API.
+const DRIVE_CLIENT_ID_KEY = 'driveClientId';
+const DRIVE_FOLDER_KEY = 'driveFolderId';
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
+
+let driveTokenClient = null;
+let driveAccessToken = null;
+let driveAccessTokenExpiry = 0;
+let driveClientId = null;
+let driveFolderId = null;
+let driveSyncInProgress = false;
+
+function parseDriveFolderId(input){
+  const trimmed = (input || '').trim();
+  const m = trimmed.match(/folders\/([a-zA-Z0-9_-]+)/);
+  if(m) return m[1];
+  if(/^[a-zA-Z0-9_-]{10,}$/.test(trimmed)) return trimmed;
+  return null;
+}
+
+function setDriveUiState(state){
+  // state: 'idle' | 'connected'
+  driveConnectBtn.style.display = state === 'connected' ? 'none' : '';
+  driveConnected.style.display = state === 'connected' ? 'flex' : 'none';
+}
+
+function ensureDriveToken(){
+  return new Promise((resolve, reject)=>{
+    if(driveAccessToken && Date.now() < driveAccessTokenExpiry){ resolve(driveAccessToken); return; }
+    if(!driveTokenClient){ reject(new Error('Drive bağlı değil')); return; }
+    driveTokenClient.callback = (resp)=>{
+      if(!resp || resp.error){ reject(new Error((resp && resp.error) || 'Yetkilendirme başarısız')); return; }
+      driveAccessToken = resp.access_token;
+      driveAccessTokenExpiry = Date.now() + (resp.expires_in * 1000) - 60000;
+      resolve(driveAccessToken);
+    };
+    driveTokenClient.requestAccessToken({ prompt: '' });
+  });
+}
+
+function addDriveDoc(file, driveId){
+  const ext = extOf(file.name);
+  if(!['pdf','docx','txt','md'].includes(ext)) return;
+  const key = 'drive:' + driveId;
+  const doc = {
+    id: ++idCounter,
+    name: file.name,
+    ext,
+    text: '',
+    status: 'pending',
+    error: '',
+    size: file.size,
+    pageCount: null,
+    _fileKey: key,
+    _fromFolder: false,
+    _fromDrive: true,
+    unpublished: unpublishedKeys.has(key)
+  };
+  docs.push(doc);
+  extractText(file, doc).then(()=>{
+    doc.status = 'ready';
+    scheduleDocsChanged();
+  }).catch(err=>{
+    doc.status = 'error';
+    doc.error = (err && err.message) ? err.message : 'okunamadı';
+    scheduleDocsChanged();
+  });
+}
+
+async function downloadAndAddDriveFiles(files, token){
+  const concurrency = 6;
+  let idx = 0;
+  async function worker(){
+    while(idx < files.length){
+      const f = files[idx++];
+      try{
+        const res = await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if(!res.ok) throw new Error('indirilemedi (' + res.status + ')');
+        const blob = await res.blob();
+        const file = new File([blob], f.name, { type: f.mimeType });
+        addDriveDoc(file, f.id);
+        renderDocList();
+      } catch(e){
+        console.error('Drive dosyası alınamadı:', f.name, e);
+      }
+    }
+  }
+  const workerCount = Math.min(concurrency, files.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
+}
+
+async function syncDriveFolder(){
+  if(!driveFolderId || driveSyncInProgress) return;
+  driveSyncInProgress = true;
+  try{
+    const token = await ensureDriveToken();
+    const q = encodeURIComponent(`'${driveFolderId}' in parents and trashed=false`);
+    const fields = encodeURIComponent('files(id,name,mimeType,size,modifiedTime)');
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=${fields}&pageSize=1000`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if(!res.ok) throw new Error('Drive listesi alınamadı (' + res.status + ')');
+    const data = await res.json();
+    const supported = ['pdf','docx','txt','md'];
+    const driveFiles = (data.files || []).filter(f => supported.includes(extOf(f.name)));
+
+    const newKeys = new Set(driveFiles.map(f => 'drive:' + f.id));
+    for(let i = docs.length - 1; i >= 0; i--){
+      const d = docs[i];
+      if(d._fromDrive && !newKeys.has(d._fileKey)) docs.splice(i, 1);
+    }
+    const existingKeys = new Set(docs.filter(d => d._fromDrive).map(d => d._fileKey));
+    const toAdd = driveFiles.filter(f => !existingKeys.has('drive:' + f.id));
+
+    renderDocList();
+    runSearchIfActive();
+    setDriveUiState('connected');
+    driveConnectedSub.textContent = 'bağlı';
+
+    if(toAdd.length > 0){
+      driveConnectedSub.textContent = `${toAdd.length} yeni dosya bulundu, indiriliyor...`;
+      await downloadAndAddDriveFiles(toAdd, token);
+      driveConnectedSub.textContent = 'bağlı';
+    }
+  } catch(err){
+    console.error(err);
+    statusLeft.textContent = 'Drive senkronizasyonu başarısız: ' + ((err && err.message) || err);
+    driveConnectedSub.textContent = 'bağlantı hatası — Yenile\'ye tekrar bas';
+  } finally {
+    driveSyncInProgress = false;
+  }
+}
+
+function initDriveTokenClient(){
+  if(!window.google || !google.accounts || !google.accounts.oauth2){
+    statusLeft.textContent = 'Google giriş kütüphanesi yüklenemedi. İnternet bağlantını kontrol et.';
+    return false;
+  }
+  driveTokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: driveClientId,
+    scope: DRIVE_SCOPE,
+    callback: ()=>{} // overridden per-request in ensureDriveToken
+  });
+  return true;
+}
+
+async function connectDrive(){
+  const clientIdVal = driveClientIdInput.value.trim();
+  const folderVal = driveFolderInput.value.trim();
+  const folderId = parseDriveFolderId(folderVal);
+  if(!clientIdVal || !folderId){
+    statusLeft.textContent = 'Client ID ve klasör linkini/ID\'sini eksiksiz gir.';
+    return;
+  }
+  driveClientId = clientIdVal;
+  driveFolderId = folderId;
+  try{
+    await idbSet(DRIVE_CLIENT_ID_KEY, driveClientId);
+    await idbSet(DRIVE_FOLDER_KEY, driveFolderId);
+  } catch(e){ /* non-fatal */ }
+
+  if(!initDriveTokenClient()) return;
+  driveSettingsPanel.style.display = 'none';
+  driveAccessToken = null; // force a fresh token for the new client/folder
+  await syncDriveFolder();
+}
+
+driveConnectBtn.addEventListener('click', async ()=>{
+  const isHidden = driveSettingsPanel.style.display === 'none';
+  if(isHidden){
+    const savedClientId = await idbGet(DRIVE_CLIENT_ID_KEY).catch(()=>null);
+    const savedFolderId = await idbGet(DRIVE_FOLDER_KEY).catch(()=>null);
+    if(savedClientId) driveClientIdInput.value = savedClientId;
+    if(savedFolderId) driveFolderInput.value = savedFolderId;
+    driveSettingsPanel.style.display = 'flex';
+  } else {
+    driveSettingsPanel.style.display = 'none';
+  }
+});
+driveConnectSaveBtn.addEventListener('click', connectDrive);
+driveRescanBtn.addEventListener('click', ()=> syncDriveFolder());
+driveDisconnectBtn.addEventListener('click', async ()=>{
+  try{
+    await idbDelete(DRIVE_CLIENT_ID_KEY);
+    await idbDelete(DRIVE_FOLDER_KEY);
+  } catch(e){ /* non-fatal */ }
+  driveClientId = null;
+  driveFolderId = null;
+  driveAccessToken = null;
+  driveTokenClient = null;
+  for(let i = docs.length - 1; i >= 0; i--){
+    if(docs[i]._fromDrive) docs.splice(i, 1);
+  }
+  renderDocList();
+  runSearchIfActive();
+  setDriveUiState('idle');
+});
+
+// On load: if a Drive connection was saved before, try to pick it back up.
+// Silent token renewal works when the browser still has an active Google
+// session; otherwise the person just taps "Google Drive'a Bağlan" once more.
+(async ()=>{
+  const savedClientId = await idbGet(DRIVE_CLIENT_ID_KEY).catch(()=>null);
+  const savedFolderId = await idbGet(DRIVE_FOLDER_KEY).catch(()=>null);
+  if(!savedClientId || !savedFolderId) return;
+  driveClientId = savedClientId;
+  driveFolderId = savedFolderId;
+  const tryInit = ()=>{
+    if(!window.google || !google.accounts || !google.accounts.oauth2){
+      setTimeout(tryInit, 300); // GIS script may still be loading
+      return;
+    }
+    if(initDriveTokenClient()) syncDriveFolder();
+  };
+  tryInit();
+})();
+
+
 </script>
 
 </body>
