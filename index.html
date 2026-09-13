@@ -46,7 +46,7 @@
   }
   @media (max-width: 760px){
     .app{ grid-template-columns: 1fr; height:auto; overflow:visible; }
-    .tray{ border-right:none; border-bottom:1px solid var(--line); height:auto; max-height:60vh; }
+    .tray{ border-right:none; border-bottom:1px solid var(--line); height:auto; max-height:60vh; overflow-y:auto; }
     .main{ height:auto; overflow:visible; }
     .results{ overflow-y:visible; }
   }
@@ -812,6 +812,7 @@ fileInput.addEventListener('change', e=>{
 const FS_SUPPORTED = 'showDirectoryPicker' in window;
 const DB_NAME = 'dokuman-arama-db';
 const STORE_NAME = 'handles';
+const CACHE_STORE_NAME = 'docCache';
 const HANDLE_KEY = 'folderHandle';
 const UNPUBLISHED_KEY = 'unpublishedList';
 let connectedHandle = null;
@@ -819,9 +820,48 @@ let unpublishedKeys = new Set();
 
 function idbOpen(){
   return new Promise((resolve, reject)=>{
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => { req.result.createObjectStore(STORE_NAME); };
+    const req = indexedDB.open(DB_NAME, 2);
+    req.onupgradeneeded = (e) => {
+      const db = req.result;
+      if(!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
+      if(!db.objectStoreNames.contains(CACHE_STORE_NAME)) db.createObjectStore(CACHE_STORE_NAME);
+    };
     req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+function cacheOpen(){ return idbOpen(); } // same DB, different store
+async function cacheSet(key, value){
+  const db = await idbOpen();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(CACHE_STORE_NAME, 'readwrite');
+    tx.objectStore(CACHE_STORE_NAME).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function cacheGet(key){
+  const db = await idbOpen();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(CACHE_STORE_NAME, 'readonly');
+    const req = tx.objectStore(CACHE_STORE_NAME).get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function cacheGetAllWithPrefix(prefix){
+  const db = await idbOpen();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(CACHE_STORE_NAME, 'readonly');
+    const store = tx.objectStore(CACHE_STORE_NAME);
+    const results = [];
+    const req = store.openCursor();
+    req.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if(!cursor){ resolve(results); return; }
+      if(String(cursor.key).startsWith(prefix)) results.push({ key: cursor.key, value: cursor.value });
+      cursor.continue();
+    };
     req.onerror = () => reject(req.error);
   });
 }
@@ -1353,6 +1393,38 @@ function scheduleDocsChanged(){
   }
 }
 
+// Wraps extractText with an IndexedDB cache keyed by file identity (name+size,
+// or the Drive file id). A cache hit skips re-parsing entirely — this is what
+// makes previously-loaded documents (especially Drive ones) searchable
+// offline, and makes reconnects much faster since nothing re-downloads.
+async function extractTextCached(file, doc){
+  try{
+    const cached = await cacheGet(doc._fileKey);
+    if(cached && cached.size === doc.size){
+      doc.text = cached.text || '';
+      if(cached.pages) doc.pages = cached.pages;
+      if(cached.displayHtml) doc.displayHtml = cached.displayHtml;
+      if(cached.pageCount) doc.pageCount = cached.pageCount;
+      return;
+    }
+  } catch(e){ /* cache miss/unavailable — fall through to live extraction */ }
+
+  await extractText(file, doc);
+
+  try{
+    await cacheSet(doc._fileKey, {
+      text: doc.text || '',
+      pages: doc.pages || null,
+      displayHtml: doc.displayHtml || null,
+      pageCount: doc.pageCount || null,
+      ext: doc.ext,
+      name: doc.name,
+      size: doc.size,
+      cachedAt: Date.now()
+    });
+  } catch(e){ /* non-fatal */ }
+}
+
 function handleFiles(files, opts = {}){
   const fromFolder = !!opts.fromFolder;
   const supported = ['pdf','docx','txt','md'];
@@ -1382,7 +1454,7 @@ function handleFiles(files, opts = {}){
   if(pairs.length === 0) return;
   renderDocList(); // one render for the whole batch, not one per file
   pairs.forEach(({ file, doc })=>{
-    extractText(file, doc).then(()=>{
+    extractTextCached(file, doc).then(()=>{
       doc.status = 'ready';
       scheduleDocsChanged();
     }).catch(err=>{
@@ -2119,7 +2191,7 @@ function addDriveDoc(file, driveId){
     unpublished: unpublishedKeys.has(key)
   };
   docs.push(doc);
-  extractText(file, doc).then(()=>{
+  extractTextCached(file, doc).then(()=>{
     doc.status = 'ready';
     scheduleDocsChanged();
   }).catch(err=>{
@@ -2188,11 +2260,52 @@ async function syncDriveFolder(){
     }
   } catch(err){
     console.error(err);
-    statusLeft.textContent = 'Drive senkronizasyonu başarısız: ' + ((err && err.message) || err);
-    driveConnectedSub.textContent = 'bağlantı hatası — Yenile\'ye tekrar bas';
+    const loadedFromCache = await loadDriveFromCacheOffline();
+    if(loadedFromCache){
+      driveConnectedSub.textContent = 'çevrimdışı — önbellekten yüklendi';
+      setDriveUiState('connected');
+    } else {
+      statusLeft.textContent = 'Drive senkronizasyonu başarısız: ' + ((err && err.message) || err);
+      driveConnectedSub.textContent = 'bağlantı hatası — Yenile\'ye tekrar bas';
+    }
   } finally {
     driveSyncInProgress = false;
   }
+}
+
+// When Drive can't be reached (offline, token failure, etc.), rebuild the
+// document list purely from whatever was cached from previous successful
+// syncs — stale is far better than empty when there's no connection.
+async function loadDriveFromCacheOffline(){
+  let entries;
+  try{ entries = await cacheGetAllWithPrefix('drive:'); } catch(e){ return false; }
+  if(!entries || entries.length === 0) return false;
+
+  for(let i = docs.length - 1; i >= 0; i--){
+    if(docs[i]._fromDrive) docs.splice(i, 1);
+  }
+  entries.forEach(({ key, value })=>{
+    const doc = {
+      id: ++idCounter,
+      name: value.name,
+      ext: value.ext,
+      text: value.text || '',
+      status: 'ready',
+      error: '',
+      size: value.size,
+      pageCount: value.pageCount || null,
+      pages: value.pages || null,
+      displayHtml: value.displayHtml || null,
+      _fileKey: key,
+      _fromFolder: false,
+      _fromDrive: true,
+      unpublished: unpublishedKeys.has(key)
+    };
+    docs.push(doc);
+  });
+  renderDocList();
+  runSearchIfActive();
+  return true;
 }
 
 function initDriveTokenClient(){
